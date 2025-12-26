@@ -82,7 +82,7 @@ void reloadShader(GLuint &shaderProgram, const char* fragPath, const char* vertS
     if (newProg) {
         glDeleteProgram(shaderProgram);
         shaderProgram = newProg;
-        //std::cout << "Shader reloaded successfully!\n";
+        std::cout << "Shader reloaded successfully!\n";
     }
 }
 

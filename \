@@ -15,13 +15,6 @@ vec2 rot(vec2 p, float a) {
     );
 }
 
-vec2 mirrorRepeat(vec2 p) {
-  p = abs(p);
-  p -= 0.5;
-  p *= 1.5;
-  return p;
-}
-
 /* Signed distance to axis-aligned box */
 float sdBox(vec2 p, vec2 b) {
     vec2 d = abs(p) - b;
@@ -37,28 +30,24 @@ void main() {
     vec2 p = uv;
 
     /* TRANSFORM SPACE (rotate space, not shape) */
-    //p = rot(p, iTime * 0.5);
+    p = rot(p, iTime * 0.5);
 
-  /* SHAPE PARAMETERS */
-    vec2 boxSize = vec2(0.5, 0.25);
+    /* SHAPE PARAMETERS */
+    vec2 boxSize = vec2(0.25, 0.5);
 
-    for (float i = 0.0; i < 3.0; i++) {
-      p = mirrorRepeat(p);
-    }
     /* SIGNED DISTANCE */
     float dist = sdBox(p, boxSize);
 
-  /* GLOW (distance → intensity) */
+    /* GLOW (distance → intensity) */
     float glow = 0.015 / (abs(dist) + 0.002);
 
     /* Optional pulse */
-    //glow *= 0.7 + 0.3 * sin(iTime * 3.0);
+    glow *= 0.7 + 0.3 * sin(iTime * 3.0);
 
     /* COLOR */
     vec3 color = vec3(0.3, 0.8, 1.2);
     color *= glow;
 
     FragColor = vec4(color, 1.0);
-    //FragColor = vec4(vec3(glow), 1.0);
 }
 

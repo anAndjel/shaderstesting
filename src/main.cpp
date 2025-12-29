@@ -5,178 +5,141 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
-#include <sys/stat.h> // for file timestamps
+#include <cmath>
 
-// ===== SHADERS =====
+// ===== VERTEX SHADER =====
 const char* vertSrc = R"(
 #version 330 core
-layout (location = 0) in vec2 pos;
+layout(location = 0) in vec2 pos;
 void main() {
     gl_Position = vec4(pos, 0.0, 1.0);
 }
 )";
 
-// ===== HELPERS =====
-std::string loadFile(const char* path) {
-    std::ifstream in(path);
-    if (!in) { 
-        std::cerr << "Failed to open " << path << "\n"; 
-        return ""; 
+// ===== AUDIO CALLBACK =====
+const int SAMPLE_RATE = 44100;
+const int AMPLITUDE = 28000;
+double frequency = 60.0; // bass frequency (Hz)
+
+void audioCallback(void* userdata, Uint8* stream, int len){
+    Sint16* buf = (Sint16*)stream;
+    int samples = len / 2;
+    static double phase = 0.0;
+    double phaseInc = 2.0*M_PI*frequency/SAMPLE_RATE;
+
+    for(int i=0;i<samples;i++){
+        buf[i] = (Sint16)(AMPLITUDE * sin(phase));
+        phase += phaseInc;
+        if(phase > 2*M_PI) phase -= 2*M_PI;
     }
+}
+
+// ===== HELPERS =====
+std::string loadFile(const char* path){
+    std::ifstream in(path);
+    if(!in){ std::cerr<<"Failed to open "<<path<<"\n"; return ""; }
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
 }
 
-GLuint compileShader(GLenum type, const char* src) {
+GLuint compileShader(GLenum type, const char* src){
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
+    glShaderSource(s,1,&src,nullptr);
     glCompileShader(s);
-
-    GLint ok;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char buf[1024];
-        glGetShaderInfoLog(s, 1024, nullptr, buf);
+    GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok);
+    if(!ok){
+        char buf[1024]; glGetShaderInfoLog(s,1024,nullptr,buf);
         std::cerr << "Shader compile error:\n" << buf << "\n";
     }
     return s;
 }
 
-GLuint linkProgram(GLuint vs, GLuint fs) {
+GLuint linkProgram(GLuint vs, GLuint fs){
     GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs);
-    glAttachShader(prog, fs);
+    glAttachShader(prog,vs); glAttachShader(prog,fs);
     glLinkProgram(prog);
-
-    GLint ok;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char buf[1024];
-        glGetProgramInfoLog(prog, 1024, nullptr, buf);
-        std::cerr << "Program link error:\n" << buf << "\n";
+    GLint ok; glGetProgramiv(prog,GL_LINK_STATUS,&ok);
+    if(!ok){
+        char buf[1024]; glGetProgramInfoLog(prog,1024,nullptr,buf);
+        std::cerr<<"Program link error:\n"<<buf<<"\n";
     }
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    glDeleteShader(vs); glDeleteShader(fs);
     return prog;
 }
 
-// ===== HOT-RELOAD FUNCTION =====
-void reloadShader(GLuint &shaderProgram, const char* fragPath, const char* vertSrc) {
+void reloadShader(GLuint &shaderProgram, const char* fragPath, const char* vertSrc){
     std::string src = loadFile(fragPath);
-
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, src.c_str());
-    GLint compiled;
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
-
-    if (!compiled) {
-        std::cerr << "Shader NOT compiled, keeping old program.\n";
-        glDeleteShader(fs);
-        return;
-    }
-
+    GLint compiled; glGetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+    if(!compiled){ std::cerr<<"Shader NOT compiled, keeping old program.\n"; glDeleteShader(fs); return; }
     GLuint vs = compileShader(GL_VERTEX_SHADER, vertSrc);
     GLuint newProg = linkProgram(vs, fs);
-
-    if (newProg) {
-        glDeleteProgram(shaderProgram);
-        shaderProgram = newProg;
-        std::cout << "Shader reloaded successfully!\n";
-    }
+    if(newProg){ glDeleteProgram(shaderProgram); shaderProgram=newProg; std::cout<<"Shader reloaded!\n"; }
 }
 
 // ===== MAIN =====
-int main() {
-    SDL_Init(SDL_INIT_VIDEO);
+int main(){
+    if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO)!=0){ std::cerr<<"SDL_Init failed\n"; return -1; }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    // --- OPENGL CONTEXT ---
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-    SDL_Window* win = SDL_CreateWindow(
-        "demo",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        1280, 720,
-        SDL_WINDOW_OPENGL
-    );
-
+    SDL_Window* win = SDL_CreateWindow("Bass Reactive Cube",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,1280,720,SDL_WINDOW_OPENGL);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
+    if(!gladLoaderLoadGL()){ std::cerr<<"GLAD failed\n"; return -1; }
 
-    if (!gladLoaderLoadGL()) {
-        puts("GLAD failed");
-        return -1;
-    }
+    std::cout<<"GL "<<glGetString(GL_VERSION)<<"\n";
 
-    printf("GL %s\n", glGetString(GL_VERSION));
+    // --- AUDIO ---
+    SDL_AudioSpec want,have; SDL_zero(want);
+    want.freq=SAMPLE_RATE; want.format=AUDIO_S16SYS; want.channels=1;
+    want.samples=1024; want.callback=audioCallback;
+    if(SDL_OpenAudio(&want,&have)<0){ std::cerr<<"Audio failed: "<<SDL_GetError()<<"\n"; }
+    SDL_PauseAudio(0); // start audio
 
-    // --- fullscreen quad ---
-    float quad[] = {
-        -1, -1,
-         1, -1,
-         1,  1,
-        -1, -1,
-         1,  1,
-        -1,  1
-    };
+    // --- FULLSCREEN QUAD ---
+    float quad[]={-1,-1,1,-1,1,1,-1,-1,1,1,-1,1};
+    GLuint vao,vbo; glGenVertexArrays(1,&vao); glGenBuffers(1,&vbo);
+    glBindVertexArray(vao); glBindBuffer(GL_ARRAY_BUFFER,vbo);
+    glBufferData(GL_ARRAY_BUFFER,sizeof(quad),quad,GL_STATIC_DRAW);
+    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,2*sizeof(float),0); glEnableVertexAttribArray(0);
 
-    GLuint vao, vbo;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), 0);
-    glEnableVertexAttribArray(0);
-
-    // --- fragment shader setup ---
+    // --- SHADER ---
     const char* fragPath = "shaders/effect.frag";
-    GLuint shaderProgram = 0;
+    std::string src = loadFile(fragPath);
+    GLuint vs=compileShader(GL_VERTEX_SHADER,vertSrc);
+    GLuint fs=compileShader(GL_FRAGMENT_SHADER,src.c_str());
+    GLuint shaderProgram = linkProgram(vs,fs);
 
-    // initial load
-    {
-        std::string src = loadFile(fragPath);
-        GLuint vs = compileShader(GL_VERTEX_SHADER, vertSrc);
-        GLuint fs = compileShader(GL_FRAGMENT_SHADER, src.c_str());
-        shaderProgram = linkProgram(vs, fs);
-    }
-
-    // --- main loop ---
-    bool running = true;
-    SDL_Event e;
-
-    while (running) {
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) running = false;
-
-            // Hot-reload on key press (R)
-            if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_R) {
-                reloadShader(shaderProgram, fragPath, vertSrc);
-            }
+    // --- MAIN LOOP ---
+    bool running=true; SDL_Event e;
+    while(running){
+        while(SDL_PollEvent(&e)){
+            if(e.type==SDL_QUIT) running=false;
+            if(e.type==SDL_KEYDOWN && e.key.keysym.scancode==SDL_SCANCODE_R) reloadShader(shaderProgram,fragPath,vertSrc);
         }
 
-        int w, h;
-        SDL_GetWindowSize(win, &w, &h);
-
-        glViewport(0, 0, w, h);
-        glClear(GL_COLOR_BUFFER_BIT);
+        int w,h; SDL_GetWindowSize(win,&w,&h);
+        glViewport(0,0,w,h); glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgram);
+        float ftime = SDL_GetTicks()*0.001f;
 
-        float ftime = SDL_GetTicks() * 0.001f;
-        glUniform1f(glGetUniformLocation(shaderProgram, "iTime"), ftime);
-        glUniform2f(glGetUniformLocation(shaderProgram, "iResolution"), (float)w, (float)h);
+        // --- bass amplitude synced to audio ---
+        float bass = (sin(ftime*2.0*M_PI*frequency)+1.0f)*0.5f;
 
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glUniform1f(glGetUniformLocation(shaderProgram,"iTime"),ftime);
+        glUniform2f(glGetUniformLocation(shaderProgram,"iResolution"),(float)w,(float)h);
+        glUniform1f(glGetUniformLocation(shaderProgram,"uBass"),bass);
 
+        glBindVertexArray(vao); glDrawArrays(GL_TRIANGLES,0,6);
         SDL_GL_SwapWindow(win);
     }
 
-    SDL_Quit();
+    SDL_CloseAudio(); SDL_Quit();
     return 0;
 }
 
